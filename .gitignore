@@ -1,0 +1,21 @@
+# Virtual environments
+.venv/
+
+# Byte-compiled / cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Application storage & runtime artifacts
+qdrant_data/
+uploads/
+logs/
+
+# Node & Build artifacts
+node_modules/
+dist/
+build/
+
+# Environment & OS files
+.env
+.DS_Store
