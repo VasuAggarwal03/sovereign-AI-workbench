@@ -444,6 +444,9 @@ def get_audit_trail():
 @app.post("/chat")
 async def chat(request: ChatRequest):
 
+    start_time = time.perf_counter()
+
+
     # -----------------------------------------------------
     # 1. SECURITY POLICY
     # -----------------------------------------------------
@@ -480,6 +483,7 @@ async def chat(request: ChatRequest):
         request.message,
         document_id=request.document_id
         )
+        response_time = time.perf_counter() - start_time
     
 
     except Exception as exc:
@@ -524,4 +528,5 @@ async def chat(request: ChatRequest):
         "risk_level": decision.risk_level,
         "reason": decision.reason,
         "request_id": request_id,
+        "response_time": round(response_time, 2),
     }

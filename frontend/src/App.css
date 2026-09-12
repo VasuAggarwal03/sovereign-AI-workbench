@@ -3722,3 +3722,13 @@ body {
   color: #374151;
   background: #f5f7fa;
 }
+
+.response-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.8;
+}

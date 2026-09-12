@@ -193,6 +193,7 @@ function App() {
           data.response ||
           "The security gateway returned an empty response.",
         blocked: allowed === false,
+        responseTime: data.response_time,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -1028,6 +1029,13 @@ function Message({ message, onCopy }) {
           <div className="message-text">
             {message.content}
           </div>
+          {message.responseTime !== undefined && !message.blocked && !message.error && (
+            <div className="response-time">
+              <Clock3 size={13} />
+              <span>Response time: {message.responseTime}s</span>
+            </div>
+          )}
+
         </div>
 
         <div className="message-actions">
