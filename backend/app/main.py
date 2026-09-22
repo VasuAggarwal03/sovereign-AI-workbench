@@ -15,6 +15,7 @@ from app.services.policy_engine import evaluate_request
 from app.services.audit_logger import log_security_event
 from app.services.ingestion_service import ingest_document
 from app.services.rag_service import rag_query
+from app.services.vision_service import analyze_image 
 
 
 app = FastAPI(title="Sovereign AI Workbench")
@@ -530,3 +531,54 @@ async def chat(request: ChatRequest):
         "request_id": request_id,
         "response_time": round(response_time, 2),
     }
+@app.post("/vision/analyze")
+async def analyze_uploaded_image(
+    file: UploadFile = File(...),
+):
+    allowed_extensions = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+    }
+
+    extension = Path(file.filename or "").suffix.lower()
+
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only PNG, JPG, JPEG, and WEBP "
+                "images are supported."
+            ),
+        )
+
+    try:
+        image_bytes = await file.read()
+
+        if not image_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded image is empty.",
+            )
+
+        response = await analyze_image(
+            image_bytes=image_bytes,
+        )
+
+        return {
+            "response": response,
+            "model": "qwen2.5vl:3b",
+            "local": True,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 VISION MODEL ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Vision analysis failed: {exc}",
+        )
