@@ -1,20 +1,13 @@
 from app.services.vector_service import search_chunks
 from app.services.ollama_service import generate_response
+from app.services.model_router import route_model
 
-
-# ============================================================
-# RETRIEVE DOCUMENT CONTEXT
-# ============================================================
 
 def retrieve_context(
     query: str,
     document_id: str | None = None,
     limit: int = 5
 ) -> str:
-    """
-    Retrieve relevant chunks from the uploaded document.
-    """
-
     results = search_chunks(
         query,
         document_id=document_id,
@@ -35,20 +28,7 @@ def retrieve_context(
     return "\n\n".join(context_parts)
 
 
-# ============================================================
-# QUESTION ROUTER
-# ============================================================
-
 async def classify_question(query: str) -> str:
-    """
-    Decide whether the user's question is related to
-    the uploaded document or is a general question.
-
-    Returns:
-        DOCUMENT
-        GENERAL
-    """
-
     router_prompt = f"""
 You are a question router.
 
@@ -73,8 +53,8 @@ DOCUMENT means:
 GENERAL means:
 - The question does not depend on the uploaded document.
 - The user is asking for general knowledge, explanation,
-  casual information, coding help, mathematics, science,
-  current knowledge, or any topic unrelated to the document.
+  coding help, mathematics, science, or any topic unrelated
+  to the document.
 
 User Question:
 {query}
@@ -99,10 +79,6 @@ Classification:
     return "GENERAL"
 
 
-# ============================================================
-# MAIN RAG QUERY
-# ============================================================
-
 async def rag_query(
     query: str,
     document_id: str | None = None
@@ -111,41 +87,57 @@ async def rag_query(
     print("🔥 RAG QUERY RECEIVED:", query)
     print("📄 DOCUMENT ID:", document_id)
 
-    # --------------------------------------------------------
-    # NO DOCUMENT UPLOADED
-    # --------------------------------------------------------
+    # --------------------------------------------------
+    # NO DOCUMENT
+    # --------------------------------------------------
 
     if not document_id:
+        model_route = route_model(query)
 
-        print("🟡 NO DOCUMENT → DIRECT OLLAMA")
+        print("🧠 MODEL ROUTE:", model_route)
 
-        response = await generate_response(query)
+        response = await generate_response(
+            query,
+            model=model_route["model"]
+        )
 
         return response
 
-    # --------------------------------------------------------
-    # CLASSIFY QUESTION
-    # --------------------------------------------------------
+    # --------------------------------------------------
+    # DOCUMENT PRESENT
+    # --------------------------------------------------
 
     question_type = await classify_question(query)
 
-    # --------------------------------------------------------
-    # GENERAL QUESTION
-    # --------------------------------------------------------
+    # --------------------------------------------------
+    # GENERAL QUESTION WITH DOCUMENT ATTACHED
+    # --------------------------------------------------
 
     if question_type == "GENERAL":
 
-        print("🟡 GENERAL QUESTION → DIRECT OLLAMA")
+        model_route = route_model(query)
 
-        response = await generate_response(query)
+        print("🧠 MODEL ROUTE:", model_route)
+
+        response = await generate_response(
+            query,
+            model=model_route["model"]
+        )
 
         return response
 
-    # --------------------------------------------------------
+    # --------------------------------------------------
     # DOCUMENT QUESTION
-    # --------------------------------------------------------
+    # --------------------------------------------------
 
     print("🟢 DOCUMENT QUESTION → RAG")
+
+    model_route = route_model(
+        query,
+        document_id=document_id
+    )
+
+    print("🧠 MODEL ROUTE:", model_route)
 
     context = retrieve_context(
         query,
@@ -155,29 +147,18 @@ async def rag_query(
     print("🔥 RETRIEVED CONTEXT:")
     print(context[:2000])
 
-    # --------------------------------------------------------
-    # NO RELEVANT DOCUMENT CONTENT
-    # --------------------------------------------------------
-
     if not context:
-
         return (
             "I could not find relevant information "
             "in the provided document."
         )
 
-    # --------------------------------------------------------
-    # DOCUMENT ANSWERING PROMPT
-    # --------------------------------------------------------
-
     prompt = f"""
 You are a helpful AI assistant.
 
-Answer the user's question using ONLY the provided
-document context.
+Answer the user's question using ONLY the provided document context.
 
-If the answer is not present in the document context,
-clearly say:
+If the answer is not present in the document context, clearly say:
 
 "I could not find this information in the provided document."
 
@@ -189,10 +170,13 @@ Document Context:
 
 User Question:
 {query}
- 
+
 Answer:
 """
 
-    response = await generate_response(prompt)
+    response = await generate_response(
+        prompt,
+        model=model_route["model"]
+    )
 
     return response

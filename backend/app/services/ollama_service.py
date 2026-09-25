@@ -1,13 +1,20 @@
 import httpx
 
-
 OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
-MODEL_NAME = "qwen3:4b"
+
+DEFAULT_MODEL = "qwen3:4b"
 
 
-async def generate_response(prompt: str) -> str:
+async def generate_response(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+) -> str:
+    """
+    Generate a response using a local Ollama model.
+    """
+
     payload = {
-        "model": MODEL_NAME,
+        "model": model,
         "prompt": prompt,
         "stream": False,
     }

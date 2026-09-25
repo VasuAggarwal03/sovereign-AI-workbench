@@ -4,6 +4,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+import tempfile 
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -15,6 +16,10 @@ from app.services.policy_engine import evaluate_request
 from app.services.audit_logger import log_security_event
 from app.services.ingestion_service import ingest_document
 from app.services.rag_service import rag_query
+from app.services.vision_service import analyze_image 
+from app.services.voice_service import transcribe_audio
+from app.services.tts_service import generate_speech
+from fastapi import Response
 
 
 app = FastAPI(title="Sovereign AI Workbench")
@@ -530,3 +535,131 @@ async def chat(request: ChatRequest):
         "request_id": request_id,
         "response_time": round(response_time, 2),
     }
+@app.post("/vision/analyze")
+async def analyze_uploaded_image(
+    file: UploadFile = File(...),
+):
+    allowed_extensions = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+    }
+
+    extension = Path(file.filename or "").suffix.lower()
+
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only PNG, JPG, JPEG, and WEBP "
+                "images are supported."
+            ),
+        )
+
+    try:
+        image_bytes = await file.read()
+
+        if not image_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded image is empty.",
+            )
+
+        response = await analyze_image(
+            image_bytes=image_bytes,
+        )
+
+        return {
+            "response": response,
+            "model": "qwen2.5vl:3b",
+            "local": True,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 VISION MODEL ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Vision analysis failed: {exc}",
+        )
+@app.post("/voice/transcribe")
+async def transcribe_voice(
+    file: UploadFile = File(...)
+):
+    try:
+        audio_bytes = await file.read()
+
+        if not audio_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio file is empty."
+            )
+
+        suffix = ".webm"
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix
+        ) as temp_file:
+
+            temp_file.write(audio_bytes)
+            temp_path = temp_file.name
+
+        try:
+            text = transcribe_audio(temp_path)
+
+        finally:
+            os.remove(temp_path)
+
+        return {
+            "text": text,
+            "model": "faster-whisper-base",
+            "local": True,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 VOICE TRANSCRIPTION ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Voice transcription failed: {exc}"
+        )
+
+@app.post("/voice/speak")
+async def speak_text(payload: dict):
+    try:
+        text = payload.get("text", "").strip()
+
+        if not text:
+            raise HTTPException(
+                status_code=400,
+                detail="Text cannot be empty.",
+            )
+
+        audio_bytes = generate_speech(text)
+
+        return Response(
+            content=audio_bytes,
+            media_type="audio/aiff",
+            headers={
+                "Content-Disposition": "inline; filename=response.aiff"
+            },
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 TTS ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Speech generation failed: {exc}",
+        )

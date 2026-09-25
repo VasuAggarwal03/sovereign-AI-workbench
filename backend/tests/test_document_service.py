@@ -1,4 +1,5 @@
 from pathlib import Path
+import uuid
 
 from docx import Document
 from reportlab.pdfgen import canvas
@@ -71,6 +72,10 @@ def test_document_ingestion():
 
     file_path = TEST_DIR / "sample_test.docx"
 
-    chunk_count = ingest_document(str(file_path))
+    chunk_count = ingest_document(
+        str(file_path),
+        document_id=str(uuid.uuid4()),
+        filename=file_path.name,
+    )
 
     assert chunk_count > 0
