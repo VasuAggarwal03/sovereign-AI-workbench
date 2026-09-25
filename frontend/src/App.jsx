@@ -7,7 +7,10 @@ import {
   Clock3,
   Copy,
   FileText,
+  Image as ImageIcon,
   Lock,
+  Mic,
+  Square,
   Menu,
   Plus,
   RotateCcw,
@@ -42,6 +45,10 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const [activeView, setActiveView] = useState("workspace");
 
@@ -73,6 +80,24 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("")
   const [documentId, setDocumentId] = useState(null);
+
+  const imageInputRef = useRef(null);
+  const createdUrlsRef = useRef(new Set());
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [imageError, setImageError] = useState("");
+  const [isVisionLoading, setIsVisionLoading] = useState(false);
+
+  // Revoke created object URLs on unmount
+  useEffect(() => {
+    const urls = createdUrlsRef.current;
+    return () => {
+      urls.forEach((url) => {
+        URL.revokeObjectURL(url);
+      });
+      urls.clear();
+    };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -130,10 +155,335 @@ function App() {
           ? "risk-low"
           : "risk-neutral";
 
-  async function sendMessage(message = input) {
-    const trimmed = message.trim();
+  function handleImageSelect(file) {
+    setImageError("");
+    if (!file) return;
 
-    if (!trimmed || loading) return;
+    const allowedExtensions = [".png", ".jpg", ".jpeg", ".webp"];
+    const allowedMimeTypes = ["image/png", "image/jpeg", "image/webp"];
+    const filename = (file.name || "").toLowerCase();
+    const hasValidExt = allowedExtensions.some((ext) => filename.endsWith(ext));
+    const hasValidMime = allowedMimeTypes.includes(file.type);
+
+    if (!hasValidExt && !hasValidMime) {
+      setImageError("Please upload a PNG, JPG, JPEG, or WEBP image.");
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+      return;
+    }
+
+    if (file.size === 0) {
+      setImageError("Uploaded image is empty.");
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+      return;
+    }
+
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+      createdUrlsRef.current.delete(imagePreview);
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    createdUrlsRef.current.add(previewUrl);
+    setSelectedImage(file);
+    setImagePreview(previewUrl);
+  }
+
+  function clearSelectedImage() {
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+      createdUrlsRef.current.delete(imagePreview);
+    }
+    setSelectedImage(null);
+    setImagePreview(null);
+    setImageError("");
+    if (imageInputRef.current) {
+      imageInputRef.current.value = "";
+    }
+  }
+  async function toggleVoiceRecording() {
+    if (isTranscribing || loading) return;
+
+    // Stop recording
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+
+      const mimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+
+      const supportedMimeType = mimeTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type)
+      );
+
+      const recorder = supportedMimeType
+        ? new MediaRecorder(stream, {
+          mimeType: supportedMimeType,
+        })
+        : new MediaRecorder(stream);
+
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+
+        const audioBlob = new Blob(
+          audioChunksRef.current,
+          {
+            type: recorder.mimeType || "audio/webm",
+          }
+        );
+
+        setIsRecording(false);
+        setIsTranscribing(true);
+
+        try {
+          const formData = new FormData();
+
+          const extension = recorder.mimeType.includes("mp4")
+            ? "mp4"
+            : "webm";
+
+          formData.append(
+            "file",
+            audioBlob,
+            `voice-input.${extension}`
+          );
+
+          const response = await fetch(
+            `${API_URL}/voice/transcribe`,
+            {
+              method: "POST",
+              body: formData,
+            }
+          );
+
+          if (!response.ok) {
+            let detail = `Voice transcription failed (${response.status})`;
+
+            try {
+              const errorData = await response.json();
+
+              if (errorData?.detail) {
+                detail = errorData.detail;
+              }
+            } catch {
+              // Keep default error
+            }
+
+            throw new Error(detail);
+          }
+
+          const data = await response.json();
+
+          const transcript = data.text?.trim();
+
+          if (transcript) {
+            setInput((previous) =>
+              previous.trim()
+                ? `${previous.trim()} ${transcript}`
+                : transcript
+            );
+          }
+        } catch (error) {
+          console.error("Voice transcription error:", error);
+
+          setSecurity({
+            status: "error",
+            allowed: null,
+            risk: "—",
+            reason: "Voice transcription failed",
+            requestId: "—",
+            model: "faster-whisper-base",
+            location: "Local",
+            gateway: "Protected",
+          });
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error("Microphone access error:", error);
+
+      setSecurity({
+        status: "error",
+        allowed: null,
+        risk: "—",
+        reason: "Microphone access was unavailable",
+        requestId: "—",
+        model: "faster-whisper-base",
+        location: "Local",
+        gateway: "Protected",
+      });
+    }
+  }
+
+  async function sendMessage(message = input) {
+    const trimmed = typeof message === "string" ? message.trim() : input.trim();
+
+    if ((!trimmed && !selectedImage) || loading) return;
+
+    if (selectedImage) {
+      const currentImage = selectedImage;
+      const currentPreview = imagePreview;
+      const promptText =
+        trimmed || "Analyze this image and describe the important visual information.";
+
+      const userMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: promptText,
+        imageUrl: currentPreview,
+        imageName: currentImage.name,
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+      setSelectedImage(null);
+      setImagePreview(null);
+      setImageError("");
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+
+      setLoading(true);
+      setIsVisionLoading(true);
+
+      setSecurity({
+        status: "analyzing",
+        allowed: null,
+        risk: "—",
+        reason: "Vision model is analyzing the image locally",
+        requestId: "processing…",
+        model: "qwen2.5vl:3b",
+      });
+
+      const startTime = performance.now();
+
+      try {
+        const formData = new FormData();
+        formData.append("file", currentImage);
+
+        const response = await fetch(`${API_URL}/vision/analyze`, {
+          method: "POST",
+          body: formData,
+        });
+
+        const elapsedSeconds = ((performance.now() - startTime) / 1000).toFixed(2);
+
+        if (!response.ok) {
+          let errDetail = `Vision analysis failed (status ${response.status})`;
+          try {
+            const errData = await response.json();
+            if (errData?.detail) {
+              errDetail =
+                typeof errData.detail === "string"
+                  ? errData.detail
+                  : JSON.stringify(errData.detail);
+            }
+          } catch {
+            // Keep default
+          }
+          throw new Error(errDetail);
+        }
+
+        const data = await response.json();
+
+        setSecurity({
+          status: "allowed",
+          allowed: true,
+          risk: "low",
+          reason: "Local vision intelligence analysis completed",
+          requestId: `vis-${Date.now().toString(36)}`,
+          model: data.model || "qwen2.5vl:3b",
+          location: data.local ? "Local" : "Remote",
+          gateway: "Protected",
+        });
+
+        const assistantMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.response || "No analysis provided by vision model.",
+          model: data.model || "qwen2.5vl:3b",
+          local: data.local ?? true,
+          responseTime: elapsedSeconds,
+          isVision: true,
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === activeSession &&
+              session.title === "New conversation"
+              ? {
+                ...session,
+                title:
+                  promptText.length > 30
+                    ? `${promptText.slice(0, 30)}…`
+                    : promptText,
+              }
+              : session
+          )
+        );
+      } catch (error) {
+        console.error("Vision analysis error:", error);
+
+        setSecurity({
+          status: "error",
+          allowed: null,
+          risk: "—",
+          reason: "Unable to complete vision analysis",
+          requestId: "—",
+          model: "qwen2.5vl:3b",
+        });
+
+        let displayError = "Vision analysis failed. Make sure the local vision model is available.";
+        if (error?.message) {
+          const clean = error.message.replace(/^Error:\s*/, "");
+          if (!clean.includes("Traceback") && !clean.includes("File \"")) {
+            displayError = clean;
+          }
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: displayError,
+            error: true,
+          },
+        ]);
+      } finally {
+        setLoading(false);
+        setIsVisionLoading(false);
+      }
+      return;
+    }
 
     const userMessage = {
       id: crypto.randomUUID(),
@@ -254,6 +604,14 @@ function App() {
   function createNewChat() {
     const id = Date.now();
 
+    // Revoke all session object URLs
+    createdUrlsRef.current.forEach((url) => {
+      URL.revokeObjectURL(url);
+    });
+    createdUrlsRef.current.clear();
+
+    clearSelectedImage();
+
     setSessions((prev) => [
       { id, title: "New conversation", time: "Just now" },
       ...prev,
@@ -277,8 +635,10 @@ function App() {
 
   function handleKeyDown(event) {
     if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      sendMessage();
+      if ((input.trim() || selectedImage) && !loading) {
+        event.preventDefault();
+        sendMessage();
+      }
     }
   }
 
@@ -415,7 +775,7 @@ function App() {
                     />
                   ))}
 
-                  {loading && <ProcessingMessage />}
+                  {loading && <ProcessingMessage isVision={isVisionLoading} />}
 
                   <div ref={bottomRef} />
                 </div>
@@ -424,6 +784,33 @@ function App() {
 
             <div className="composer-wrapper">
               <div className="composer">
+                {selectedImage && imagePreview && (
+                  <div className="composer-image-preview">
+                    <div className="composer-image-thumb-wrapper">
+                      <img
+                        src={imagePreview}
+                        alt={selectedImage.name}
+                        className="composer-image-thumb"
+                      />
+                    </div>
+                    <span
+                      className="composer-image-name"
+                      title={selectedImage.name}
+                    >
+                      {selectedImage.name}
+                    </span>
+                    <button
+                      type="button"
+                      className="composer-image-remove"
+                      onClick={clearSelectedImage}
+                      aria-label="Remove image"
+                      title="Remove image"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                )}
+
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -433,11 +820,26 @@ function App() {
                     uploadDocument(event.target.files?.[0]);
                   }}
                 />
+
+                <input
+                  ref={imageInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  hidden
+                  onChange={(event) => {
+                    handleImageSelect(event.target.files?.[0]);
+                  }}
+                />
+
                 <textarea
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Message Sovereign AI…"
+                  placeholder={
+                    selectedImage
+                      ? "Ask about this image (or press send to analyze)…"
+                      : "Message Sovereign AI…"
+                  }
                   rows={1}
                   disabled={loading}
                 />
@@ -455,13 +857,49 @@ function App() {
                       <FileText size={15} />
                       {uploading ? "Uploading..." : "Upload document"}
                     </button>
+                    <button
+                      type="button"
+                      className="upload-button image-upload-button"
+                      onClick={() => imageInputRef.current?.click()}
+                      disabled={loading}
+                      title="Attach image for vision analysis"
+                    >
+                      <ImageIcon size={15} />
+                      Attach image
+                    </button>
                   </div>
 
                   <button
-                    className={`send-button ${input.trim() ? "active" : ""
-                      }`}
+                    type="button"
+                    className={`voice-button ${isRecording ? "recording" : ""}`}
+                    onClick={toggleVoiceRecording}
+                    disabled={loading || isTranscribing}
+                    aria-label={
+                      isRecording
+                        ? "Stop voice recording"
+                        : "Start voice recording"
+                    }
+                    title={
+                      isRecording
+                        ? "Stop recording"
+                        : isTranscribing
+                          ? "Transcribing..."
+                          : "Speak"
+                    }
+                  >
+                    {isTranscribing ? (
+                      <RotateCcw className="spin" size={17} />
+                    ) : isRecording ? (
+                      <Square size={15} />
+                    ) : (
+                      <Mic size={18} />
+                    )}
+                  </button>
+
+                  <button
+                    className={`send-button ${(input.trim() || selectedImage) ? "active" : ""}`}
                     onClick={() => sendMessage()}
-                    disabled={!input.trim() || loading}
+                    disabled={(!input.trim() && !selectedImage) || loading}
                     aria-label="Send message"
                   >
                     {loading ? (
@@ -476,6 +914,12 @@ function App() {
               {uploadStatus && (
                 <div className="upload-status">
                   {uploadStatus}
+                </div>
+              )}
+
+              {imageError && (
+                <div className="upload-status image-error-status">
+                  {imageError}
                 </div>
               )}
 
@@ -542,7 +986,7 @@ function Sidebar({
         </div>
 
         <div>
-          <div className="brand-name">Sovereign AI</div>
+          <div className="brand-name">INDUS AI</div>
           <div className="brand-subtitle">WORKBENCH</div>
         </div>
       </div>
@@ -992,7 +1436,21 @@ function Message({ message, onCopy }) {
     return (
       <div className="message-row user-row">
         <div className="user-message">
-          {message.content}
+          {message.imageUrl && (
+            <div className="user-message-image-wrapper">
+              <img
+                src={message.imageUrl}
+                alt={message.imageName || "Attached image"}
+                className="user-message-image"
+              />
+              {message.imageName && (
+                <div className="user-message-image-name" title={message.imageName}>
+                  {message.imageName}
+                </div>
+              )}
+            </div>
+          )}
+          <div>{message.content}</div>
         </div>
       </div>
     );
@@ -1029,10 +1487,23 @@ function Message({ message, onCopy }) {
           <div className="message-text">
             {message.content}
           </div>
-          {message.responseTime !== undefined && !message.blocked && !message.error && (
-            <div className="response-time">
-              <Clock3 size={13} />
-              <span>Response time: {message.responseTime}s</span>
+
+          {((message.responseTime !== undefined && !message.blocked && !message.error) || message.isVision) && (
+            <div className="message-meta-row">
+              {message.isVision && (
+                <div className="vision-meta-badge">
+                  <span className="vision-badge-name">🖼️ Qwen2.5-VL 3B</span>
+                  {message.local && (
+                    <span className="vision-badge-local">🔒 Local</span>
+                  )}
+                </div>
+              )}
+              {message.responseTime !== undefined && !message.blocked && !message.error && (
+                <div className="response-time">
+                  <Clock3 size={13} />
+                  <span>Response time: {message.responseTime}s</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1053,7 +1524,7 @@ function Message({ message, onCopy }) {
    PROCESSING
    ========================================================= */
 
-function ProcessingMessage() {
+function ProcessingMessage({ isVision }) {
   return (
     <div className="message-row assistant-row">
       <div className="assistant-avatar processing-avatar">
@@ -1067,24 +1538,24 @@ function ProcessingMessage() {
 
         <div className="processing-card">
           <div className="processing-title">
-            Evaluating request
+            {isVision ? "Analyzing image" : "Evaluating request"}
           </div>
 
           <div className="processing-steps">
             <div className="processing-step active">
               <span />
-              Policy Engine
-              <small>checking</small>
+              {isVision ? "Local Vision Pipeline" : "Policy Engine"}
+              <small>{isVision ? "active" : "checking"}</small>
             </div>
 
             <div className="processing-step">
               <span />
-              Risk assessment
+              {isVision ? "Vision inference (Qwen2.5-VL)" : "Risk assessment"}
             </div>
 
             <div className="processing-step">
               <span />
-              Local inference
+              {isVision ? "Local response generation" : "Local inference"}
             </div>
           </div>
         </div>

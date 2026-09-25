@@ -4,6 +4,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+import tempfile 
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -16,6 +17,7 @@ from app.services.audit_logger import log_security_event
 from app.services.ingestion_service import ingest_document
 from app.services.rag_service import rag_query
 from app.services.vision_service import analyze_image 
+from app.services.voice_service import transcribe_audio
 
 
 app = FastAPI(title="Sovereign AI Workbench")
@@ -581,4 +583,49 @@ async def analyze_uploaded_image(
         raise HTTPException(
             status_code=500,
             detail=f"Vision analysis failed: {exc}",
+        )
+@app.post("/voice/transcribe")
+async def transcribe_voice(
+    file: UploadFile = File(...)
+):
+    try:
+        audio_bytes = await file.read()
+
+        if not audio_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail="Audio file is empty."
+            )
+
+        suffix = ".webm"
+
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=suffix
+        ) as temp_file:
+
+            temp_file.write(audio_bytes)
+            temp_path = temp_file.name
+
+        try:
+            text = transcribe_audio(temp_path)
+
+        finally:
+            os.remove(temp_path)
+
+        return {
+            "text": text,
+            "model": "faster-whisper-base",
+            "local": True,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 VOICE TRANSCRIPTION ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Voice transcription failed: {exc}"
         )
