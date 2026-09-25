@@ -18,6 +18,8 @@ from app.services.ingestion_service import ingest_document
 from app.services.rag_service import rag_query
 from app.services.vision_service import analyze_image 
 from app.services.voice_service import transcribe_audio
+from app.services.tts_service import generate_speech
+from fastapi import Response
 
 
 app = FastAPI(title="Sovereign AI Workbench")
@@ -628,4 +630,36 @@ async def transcribe_voice(
         raise HTTPException(
             status_code=500,
             detail=f"Voice transcription failed: {exc}"
+        )
+
+@app.post("/voice/speak")
+async def speak_text(payload: dict):
+    try:
+        text = payload.get("text", "").strip()
+
+        if not text:
+            raise HTTPException(
+                status_code=400,
+                detail="Text cannot be empty.",
+            )
+
+        audio_bytes = generate_speech(text)
+
+        return Response(
+            content=audio_bytes,
+            media_type="audio/aiff",
+            headers={
+                "Content-Disposition": "inline; filename=response.aiff"
+            },
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print("🔥 TTS ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Speech generation failed: {exc}",
         )

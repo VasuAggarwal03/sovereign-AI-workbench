@@ -11,6 +11,7 @@ import {
   Lock,
   Mic,
   Square,
+  Volume2,
   Menu,
   Plus,
   RotateCcw,
@@ -39,6 +40,55 @@ const starterPrompts = [
     description: "Learn about modern security architecture",
   },
 ];
+async function speakResponse(text) {
+  if (!text?.trim()) return;
+
+  try {
+    const response = await fetch(`${API_URL}/voice/speak`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text: text.trim(),
+      }),
+    });
+
+    if (!response.ok) {
+      let detail = `Speech generation failed (${response.status})`;
+
+      try {
+        const errorData = await response.json();
+
+        if (errorData?.detail) {
+          detail = errorData.detail;
+        }
+      } catch {
+        // Keep default error
+      }
+
+      throw new Error(detail);
+    }
+
+    const audioBlob = await response.blob();
+    const audioUrl = URL.createObjectURL(audioBlob);
+
+    const audio = new Audio(audioUrl);
+
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+    };
+
+    audio.onerror = () => {
+      URL.revokeObjectURL(audioUrl);
+      console.error("Audio playback failed.");
+    };
+
+    await audio.play();
+  } catch (error) {
+    console.error("Voice playback error:", error);
+  }
+}
 
 function App() {
   const fileInputRef = useRef(null);
@@ -212,6 +262,8 @@ function App() {
       mediaRecorderRef.current?.stop();
       return;
     }
+
+
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -772,6 +824,7 @@ function App() {
                       key={message.id}
                       message={message}
                       onCopy={copyMessage}
+                      onSpeak={speakResponse}
                     />
                   ))}
 
@@ -1431,7 +1484,7 @@ function WelcomeScreen({ onPrompt }) {
    CHAT MESSAGE
    ========================================================= */
 
-function Message({ message, onCopy }) {
+function Message({ message, onCopy, onSpeak }) {
   if (message.role === "user") {
     return (
       <div className="message-row user-row">
@@ -1513,6 +1566,14 @@ function Message({ message, onCopy }) {
           <button onClick={() => onCopy(message.content)}>
             <Copy size={13} />
             Copy
+          </button>
+
+          <button
+            onClick={() => onSpeak(message.content)}
+            title="Speak response"
+          >
+            <Volume2 size={13} />
+            Speak
           </button>
         </div>
       </div>
